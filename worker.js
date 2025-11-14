@@ -5188,13 +5188,13 @@ function getProgressBarHtml(percentage) {
 // 移动端辅助函数
 function getServerStatusBadge(status) {
     if (status === 'online') {
-        return { class: 'bg-success', text: '在线' };
+        return { badgeClass: 'bg-success', text: '在线' };
     } else if (status === 'offline') {
-        return { class: 'bg-danger', text: '离线' };
+        return { badgeClass: 'bg-danger', text: '离线' };
     } else if (status === 'error') {
-        return { class: 'bg-warning text-dark', text: '错误' };
+        return { badgeClass: 'bg-warning text-dark', text: '错误' };
     } else {
-        return { class: 'bg-secondary', text: '未知' };
+        return { badgeClass: 'bg-secondary', text: '未知' };
     }
 }
 
@@ -5276,7 +5276,8 @@ function createServerViewModel(data) {
     }
 
     const statusBadge = getServerStatusBadge(status);
-    const statusBadgeHtml = `<span class="badge ${statusBadge.class}">${statusBadge.text}</span>`;
+    const { badgeClass: statusBadgeCssClass = '', text: statusBadgeText = '' } = statusBadge || {};
+    const statusBadgeHtml = `<span class="badge ${statusBadgeCssClass}">${statusBadgeText}</span>`;
 
     const cpuPercent = metrics && metrics.cpu && typeof metrics.cpu.usage_percent === 'number'
         ? metrics.cpu.usage_percent
@@ -5375,8 +5376,9 @@ function buildServerCard(viewModel, options = {}) {
 
     const badgeElement = document.createElement('span');
     badgeElement.classList.add('badge');
-    if (viewModel.statusBadge && viewModel.statusBadge.class) {
-        viewModel.statusBadge.class.split(' ').forEach(cls => cls && badgeElement.classList.add(cls));
+    const badgeCssClass = viewModel.statusBadge ? viewModel.statusBadge['badgeClass'] : '';
+    if (badgeCssClass) {
+        badgeCssClass.split(' ').forEach(cls => cls && badgeElement.classList.add(cls));
     }
     badgeElement.textContent = viewModel.statusBadge ? viewModel.statusBadge.text : '未知';
     header.appendChild(badgeElement);
@@ -5551,7 +5553,7 @@ function renderMobileSiteCards(sites) {
         cardHeader.className = 'mobile-card-header';
         cardHeader.innerHTML = \`
             <h6 class="mobile-card-title">\${site.name || '未命名网站'}</h6>
-            <span class="badge \${statusInfo.class}">\${statusInfo.text}</span>
+            <span class="badge \${statusInfo['badgeClass']}">\${statusInfo.text}</span>
         \`;
 
         // 卡片主体
@@ -5721,7 +5723,7 @@ function renderMobileAdminSiteCards(sites) {
         cardHeader.className = 'mobile-card-header';
         cardHeader.innerHTML = \`
             <h6 class="mobile-card-title">\${site.name || '未命名网站'}</h6>
-            <span class="badge \${statusInfo.class}">\${statusInfo.text}</span>
+            <span class="badge \${statusInfo['badgeClass']}">\${statusInfo.text}</span>
         \`;
 
         // 卡片主体
@@ -5957,7 +5959,7 @@ async function renderSiteStatusTable(sites) {
 
         row.innerHTML = \`
             <td>\${site.name || '-'}</td>
-            <td><span class="badge \${statusInfo.class}">\${statusInfo.text}</span></td>
+            <td><span class="badge \${statusInfo['badgeClass']}">\${statusInfo.text}</span></td>
             <td>\${site.last_status_code || '-'}</td>
             <td>\${responseTime}</td>
             <td>\${lastCheckTime}</td>
@@ -6043,12 +6045,12 @@ async function fetchAndRenderSiteHistory(siteId, containerElement) {
 // Get website status badge class and text (copied from admin.js for reuse)
 function getSiteStatusBadge(status) {
     switch (status) {
-        case 'UP': return { class: 'bg-success', text: '正常' };
-        case 'DOWN': return { class: 'bg-danger', text: '故障' };
-        case 'TIMEOUT': return { class: 'bg-warning text-dark', text: '超时' };
-        case 'ERROR': return { class: 'bg-danger', text: '错误' };
-        case 'PENDING': return { class: 'bg-secondary', text: '待检测' };
-        default: return { class: 'bg-secondary', text: '未知' };
+        case 'UP': return { badgeClass: 'bg-success', text: '正常' };
+        case 'DOWN': return { badgeClass: 'bg-danger', text: '故障' };
+        case 'TIMEOUT': return { badgeClass: 'bg-warning text-dark', text: '超时' };
+        case 'ERROR': return { badgeClass: 'bg-danger', text: '错误' };
+        case 'PENDING': return { badgeClass: 'bg-secondary', text: '待检测' };
+        default: return { badgeClass: 'bg-secondary', text: '未知' };
     }
 }
 `;
@@ -7267,7 +7269,7 @@ function renderSiteTable(sites) {
             </td>
             <td>\${site.name || '-'}</td>
             <td><a href="\${site.url}" target="_blank" rel="noopener noreferrer">\${site.url}</a></td>
-            <td><span class="badge \${statusInfo.class}">\${statusInfo.text}</span></td>
+            <td><span class="badge \${statusInfo['badgeClass']}">\${statusInfo.text}</span></td>
             <td>\${site.last_status_code || '-'}</td>
             <td>\${responseTime}</td>
             <td>\${lastCheckTime}</td>
@@ -7451,12 +7453,12 @@ async function performSiteDragSort(draggedSiteId, targetSiteId, insertBefore) {
 // 获取网站状态对应的Badge样式和文本
 function getSiteStatusBadge(status) {
     switch (status) {
-        case 'UP': return { class: 'bg-success', text: '正常' };
-        case 'DOWN': return { class: 'bg-danger', text: '故障' };
-        case 'TIMEOUT': return { class: 'bg-warning text-dark', text: '超时' };
-        case 'ERROR': return { class: 'bg-danger', text: '错误' };
-        case 'PENDING': return { class: 'bg-secondary', text: '待检测' };
-        default: return { class: 'bg-secondary', text: '未知' };
+        case 'UP': return { badgeClass: 'bg-success', text: '正常' };
+        case 'DOWN': return { badgeClass: 'bg-danger', text: '故障' };
+        case 'TIMEOUT': return { badgeClass: 'bg-warning text-dark', text: '超时' };
+        case 'ERROR': return { badgeClass: 'bg-danger', text: '错误' };
+        case 'PENDING': return { badgeClass: 'bg-secondary', text: '待检测' };
+        default: return { badgeClass: 'bg-secondary', text: '未知' };
     }
 }
 
