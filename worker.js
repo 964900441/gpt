@@ -5113,6 +5113,7 @@ async function loadAllServerStatuses() {
             // Remove any existing detail rows if the server list becomes empty
             removeAllDetailRows();
             // 同时更新移动端卡片容器
+            renderDesktopServerCards([]);
             renderMobileServerCards([]);
             return;
         } else {
@@ -5143,6 +5144,10 @@ async function loadAllServerStatuses() {
         serverTableBody.innerHTML = '<tr><td colspan="11" class="text-center text-danger">Failed to load server data. Please refresh the page.</td></tr>';
         removeAllDetailRows();
         // 同时更新移动端卡片容器显示错误状态
+        const desktopContainer = document.getElementById('serverCardContainer');
+        if (desktopContainer) {
+            desktopContainer.innerHTML = '<div class="text-center p-3 text-danger">加载服务器数据失败，请刷新页面重试。</div>';
+        }
         const mobileContainer = document.getElementById('mobileServerContainer');
         if (mobileContainer) {
             mobileContainer.innerHTML = '<div class="text-center p-3 text-danger">加载服务器数据失败，请刷新页面重试。</div>';
@@ -5246,15 +5251,252 @@ function renderHistoryBar(container, history) {
     container.innerHTML = historyHtml;
 }
 
+function createServerViewModel(data) {
+    if (!data || !data.server) return null;
+
+    const server = data.server;
+    const metrics = data.metrics || null;
+    const hasError = Boolean(data.error);
+    const serverName = server.name || '未命名服务器';
+
+    let status = 'unknown';
+    let lastReportDate = null;
+    let lastUpdateText = '从未';
+
+    if (hasError) {
+        status = 'error';
+    } else if (metrics && typeof metrics.timestamp === 'number') {
+        lastReportDate = new Date(metrics.timestamp * 1000);
+        lastUpdateText = lastReportDate.toLocaleString();
+        const now = new Date();
+        const diffMinutes = (now - lastReportDate) / (1000 * 60);
+        status = diffMinutes <= 5 ? 'online' : 'offline';
+    } else {
+        status = 'unknown';
+    }
+
+    const statusBadge = getServerStatusBadge(status);
+    const statusBadgeHtml = `<span class="badge ${statusBadge.class}">${statusBadge.text}</span>`;
+
+    const cpuPercent = metrics && metrics.cpu && typeof metrics.cpu.usage_percent === 'number'
+        ? metrics.cpu.usage_percent
+        : null;
+    const memoryPercent = metrics && metrics.memory && typeof metrics.memory.usage_percent === 'number'
+        ? metrics.memory.usage_percent
+        : null;
+    const diskPercent = metrics && metrics.disk && typeof metrics.disk.usage_percent === 'number'
+        ? metrics.disk.usage_percent
+        : null;
+
+    const uptimeSeconds = metrics && typeof metrics.uptime === 'number' ? metrics.uptime : null;
+    const network = metrics && metrics.network ? metrics.network : null;
+
+    return {
+        __isServerViewModel: true,
+        id: server.id,
+        displayName: serverName,
+        status,
+        statusBadge,
+        statusBadgeHtml,
+        lastUpdateText,
+        lastReportDate,
+        hasError,
+        cpu: {
+            percent: cpuPercent,
+            displayValue: typeof cpuPercent === 'number' ? `${cpuPercent.toFixed(1)}%` : '-',
+            progressHtml: typeof cpuPercent === 'number' ? getProgressBarHtml(cpuPercent) : '-'
+        },
+        memory: {
+            percent: memoryPercent,
+            displayValue: typeof memoryPercent === 'number' ? `${memoryPercent.toFixed(1)}%` : '-',
+            progressHtml: typeof memoryPercent === 'number' ? getProgressBarHtml(memoryPercent) : '-'
+        },
+        disk: {
+            percent: diskPercent,
+            displayValue: typeof diskPercent === 'number' ? `${diskPercent.toFixed(1)}%` : '-',
+            progressHtml: typeof diskPercent === 'number' ? getProgressBarHtml(diskPercent) : '-'
+        },
+        network: {
+            uploadSpeed: network ? formatNetworkSpeed(network.upload_speed) : '-',
+            downloadSpeed: network ? formatNetworkSpeed(network.download_speed) : '-',
+            totalUpload: network ? formatDataSize(network.total_upload) : '-',
+            totalDownload: network ? formatDataSize(network.total_download) : '-'
+        },
+        uptimeText: typeof uptimeSeconds === 'number' ? formatUptime(uptimeSeconds) : '-'
+    };
+}
+
+function normalizeServerViewModels(list) {
+    if (!Array.isArray(list)) return [];
+    if (list.length > 0 && list[0] && list[0].__isServerViewModel) {
+        return list;
+    }
+    return list.map(item => createServerViewModel(item)).filter(Boolean);
+}
+
+function buildServerCard(viewModel, options = {}) {
+    const {
+        cardClasses = ['server-card'],
+        headerClasses = ['server-card-header'],
+        titleClasses = ['server-card-title'],
+        bodyClasses = ['server-card-body'],
+        rowClasses = ['server-card-row'],
+        twoColumnClasses = ['server-card-two-columns'],
+        columnItemClasses = ['server-card-column-item'],
+        labelClasses = ['server-card-label'],
+        valueClasses = ['server-card-value'],
+        labels = {}
+    } = options;
+
+    const resolvedLabels = {
+        uploadSpeed: '上传速度',
+        downloadSpeed: '下载速度',
+        cpu: 'CPU',
+        memory: '内存',
+        disk: '硬盘',
+        uptime: '运行时长',
+        totalUpload: '总上传',
+        totalDownload: '总下载',
+        lastUpdate: '最后更新',
+        ...labels
+    };
+
+    const card = document.createElement('div');
+    card.classList.add(...cardClasses.filter(Boolean));
+    card.setAttribute('data-server-id', viewModel.id);
+
+    const header = document.createElement('div');
+    header.classList.add(...headerClasses.filter(Boolean));
+
+    const titleElement = document.createElement('h6');
+    titleElement.classList.add(...titleClasses.filter(Boolean));
+    titleElement.textContent = viewModel.displayName;
+    header.appendChild(titleElement);
+
+    const badgeElement = document.createElement('span');
+    badgeElement.classList.add('badge');
+    if (viewModel.statusBadge && viewModel.statusBadge.class) {
+        viewModel.statusBadge.class.split(' ').forEach(cls => cls && badgeElement.classList.add(cls));
+    }
+    badgeElement.textContent = viewModel.statusBadge ? viewModel.statusBadge.text : '未知';
+    header.appendChild(badgeElement);
+    card.appendChild(header);
+
+    const body = document.createElement('div');
+    body.classList.add(...bodyClasses.filter(Boolean));
+
+    const rowClassName = rowClasses.filter(Boolean).join(' ');
+    const twoColumnClassName = twoColumnClasses.filter(Boolean).join(' ');
+    const columnItemClassName = columnItemClasses.filter(Boolean).join(' ');
+    const labelClassName = labelClasses.filter(Boolean).join(' ');
+    const valueClassName = valueClasses.filter(Boolean).join(' ');
+
+    const addTwoColumnRow = (pairs) => {
+        const row = document.createElement('div');
+        if (twoColumnClassName) {
+            row.className = twoColumnClassName;
+        }
+        row.innerHTML = pairs.map(pair => `
+            <div class="${columnItemClassName}">
+                <span class="${labelClassName}">${pair.label}</span>
+                <span class="${valueClassName}">${pair.value}</span>
+            </div>
+        `).join('');
+        body.appendChild(row);
+    };
+
+    const addInfoRow = (label, value) => {
+        const row = document.createElement('div');
+        if (rowClassName) {
+            row.className = rowClassName;
+        }
+        row.innerHTML = `
+            <span class="${labelClassName}">${label}</span>
+            <span class="${valueClassName}">${value}</span>
+        `;
+        body.appendChild(row);
+    };
+
+    addTwoColumnRow([
+        { label: resolvedLabels.uploadSpeed, value: viewModel.network.uploadSpeed },
+        { label: resolvedLabels.downloadSpeed, value: viewModel.network.downloadSpeed }
+    ]);
+
+    addTwoColumnRow([
+        { label: resolvedLabels.cpu, value: viewModel.cpu.displayValue },
+        { label: resolvedLabels.memory, value: viewModel.memory.displayValue }
+    ]);
+
+    addTwoColumnRow([
+        { label: resolvedLabels.disk, value: viewModel.disk.displayValue },
+        { label: resolvedLabels.uptime, value: viewModel.uptimeText }
+    ]);
+
+    addTwoColumnRow([
+        { label: resolvedLabels.totalUpload, value: viewModel.network.totalUpload },
+        { label: resolvedLabels.totalDownload, value: viewModel.network.totalDownload }
+    ]);
+
+    addInfoRow(resolvedLabels.lastUpdate, viewModel.lastUpdateText);
+
+    card.appendChild(body);
+
+    return card;
+}
+
+function renderServerCardCollection(serverDataList, options = {}) {
+    const {
+        containerId,
+        emptyStateHtml = '',
+        cardOptions = {}
+    } = options;
+
+    if (!containerId) return;
+
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const viewModels = normalizeServerViewModels(serverDataList);
+
+    container.innerHTML = '';
+
+    if (viewModels.length === 0) {
+        if (emptyStateHtml) {
+            container.innerHTML = emptyStateHtml;
+        }
+        return;
+    }
+
+    viewModels.forEach(viewModel => {
+        container.appendChild(buildServerCard(viewModel, cardOptions));
+    });
+}
+
+function renderDesktopServerCards(serverDataList) {
+    renderServerCardCollection(serverDataList, {
+        containerId: 'serverCardContainer',
+        emptyStateHtml: `
+            <div class="text-center p-4 text-muted">暂无服务器数据</div>
+        `,
+        cardOptions: {
+            cardClasses: ['server-card', 'desktop-server-card'],
+            headerClasses: ['server-card-header'],
+            titleClasses: ['server-card-title'],
+            bodyClasses: ['server-card-body'],
+            rowClasses: ['server-card-row'],
+            twoColumnClasses: ['server-card-two-columns'],
+            columnItemClasses: ['server-card-column-item'],
+            labelClasses: ['server-card-label'],
+            valueClasses: ['server-card-value']
+        }
+    });
+}
+
 // 移动端服务器卡片渲染函数
-function renderMobileServerCards(allStatuses) {
-    const mobileContainer = document.getElementById('mobileServerContainer');
-    if (!mobileContainer) return;
-
-    mobileContainer.innerHTML = '';
-
-    if (!allStatuses || allStatuses.length === 0) {
-        mobileContainer.innerHTML = \`
+function renderMobileServerCards(serverDataList) {
+    renderServerCardCollection(serverDataList, {
+        containerId: 'mobileServerContainer',
+        emptyStateHtml: `
             <div class="text-center p-4">
                 <i class="bi bi-server text-muted" style="font-size: 3rem;"></i>
                 <div class="mt-3 text-muted">
@@ -5262,140 +5504,20 @@ function renderMobileServerCards(allStatuses) {
                     <small>请登录管理后台添加服务器</small>
                 </div>
             </div>
-        \`;
-        return;
-    }
-
-    allStatuses.forEach(data => {
-        const serverId = data.server.id;
-        const serverName = data.server.name;
-        const metrics = data.metrics;
-        const hasError = data.error;
-
-        const card = document.createElement('div');
-        card.className = 'mobile-server-card';
-        card.setAttribute('data-server-id', serverId);
-
-        // 确定服务器状态
-        let status = 'unknown';
-        let lastUpdate = '从未';
-
-        if (hasError) {
-            status = 'error';
-        } else if (metrics) {
-            const now = new Date();
-            const lastReportTime = new Date(metrics.timestamp * 1000);
-            const diffMinutes = (now - lastReportTime) / (1000 * 60);
-
-            if (diffMinutes <= 5) {
-                status = 'online';
-            } else {
-                status = 'offline';
-            }
-            lastUpdate = lastReportTime.toLocaleString();
+        `,
+        cardOptions: {
+            cardClasses: ['server-card', 'mobile-server-card'],
+            headerClasses: ['server-card-header', 'mobile-card-header'],
+            titleClasses: ['server-card-title', 'mobile-card-title'],
+            bodyClasses: ['server-card-body', 'mobile-card-body'],
+            rowClasses: ['server-card-row', 'mobile-card-row'],
+            twoColumnClasses: ['server-card-two-columns', 'mobile-card-two-columns'],
+            columnItemClasses: ['server-card-column-item', 'mobile-card-column-item'],
+            labelClasses: ['server-card-label', 'mobile-card-label'],
+            valueClasses: ['server-card-value', 'mobile-card-value']
         }
-
-        const statusInfo = getServerStatusBadge(status);
-
-        // 卡片头部
-        const cardHeader = document.createElement('div');
-        cardHeader.className = 'mobile-card-header';
-        cardHeader.innerHTML = \`
-            <h6 class="mobile-card-title">\${serverName || '未命名服务器'}</h6>
-            <span class="badge \${statusInfo.class}">\${statusInfo.text}</span>
-        \`;
-
-        // 卡片主体 - 显示所有信息
-        const cardBody = document.createElement('div');
-        cardBody.className = 'mobile-card-body';
-
-        // 获取所有数据
-        const cpuValue = metrics && metrics.cpu ? \`\${metrics.cpu.usage_percent.toFixed(1)}%\` : '-';
-        const memoryValue = metrics && metrics.memory ? \`\${metrics.memory.usage_percent.toFixed(1)}%\` : '-';
-        const diskValue = metrics && metrics.disk ? \`\${metrics.disk.usage_percent.toFixed(1)}%\` : '-';
-        const uptimeValue = metrics && metrics.uptime ? formatUptime(metrics.uptime) : '-';
-        const uploadSpeed = metrics && metrics.network ? formatNetworkSpeed(metrics.network.upload_speed) : '-';
-        const downloadSpeed = metrics && metrics.network ? formatNetworkSpeed(metrics.network.download_speed) : '-';
-        const totalUpload = metrics && metrics.network ? formatDataSize(metrics.network.total_upload) : '-';
-        const totalDownload = metrics && metrics.network ? formatDataSize(metrics.network.total_download) : '-';
-
-        // 上传速度 | 下载速度
-        const speedRow = document.createElement('div');
-        speedRow.className = 'mobile-card-two-columns';
-        speedRow.innerHTML = \`
-            <div class="mobile-card-column-item">
-                <span class="mobile-card-label">上传速度</span>
-                <span class="mobile-card-value">\${uploadSpeed}</span>
-            </div>
-            <div class="mobile-card-column-item">
-                <span class="mobile-card-label">下载速度</span>
-                <span class="mobile-card-value">\${downloadSpeed}</span>
-            </div>
-        \`;
-        cardBody.appendChild(speedRow);
-
-        // CPU | 内存
-        const cpuMemoryRow = document.createElement('div');
-        cpuMemoryRow.className = 'mobile-card-two-columns';
-        cpuMemoryRow.innerHTML = \`
-            <div class="mobile-card-column-item">
-                <span class="mobile-card-label">CPU</span>
-                <span class="mobile-card-value">\${cpuValue}</span>
-            </div>
-            <div class="mobile-card-column-item">
-                <span class="mobile-card-label">内存</span>
-                <span class="mobile-card-value">\${memoryValue}</span>
-            </div>
-        \`;
-        cardBody.appendChild(cpuMemoryRow);
-
-        // 硬盘 | 运行时长
-        const diskUptimeRow = document.createElement('div');
-        diskUptimeRow.className = 'mobile-card-two-columns';
-        diskUptimeRow.innerHTML = \`
-            <div class="mobile-card-column-item">
-                <span class="mobile-card-label">硬盘</span>
-                <span class="mobile-card-value">\${diskValue}</span>
-            </div>
-            <div class="mobile-card-column-item">
-                <span class="mobile-card-label">运行时长</span>
-                <span class="mobile-card-value">\${uptimeValue}</span>
-            </div>
-        \`;
-        cardBody.appendChild(diskUptimeRow);
-
-        // 总上传 | 总下载
-        const totalRow = document.createElement('div');
-        totalRow.className = 'mobile-card-two-columns';
-        totalRow.innerHTML = \`
-            <div class="mobile-card-column-item">
-                <span class="mobile-card-label">总上传</span>
-                <span class="mobile-card-value">\${totalUpload}</span>
-            </div>
-            <div class="mobile-card-column-item">
-                <span class="mobile-card-label">总下载</span>
-                <span class="mobile-card-value">\${totalDownload}</span>
-            </div>
-        \`;
-        cardBody.appendChild(totalRow);
-
-        // 最后更新 - 单行
-        const lastUpdateRow = document.createElement('div');
-        lastUpdateRow.className = 'mobile-card-row';
-        lastUpdateRow.innerHTML = \`
-            <span class="mobile-card-label">最后更新</span>
-            <span class="mobile-card-value">\${lastUpdate}</span>
-        \`;
-        cardBody.appendChild(lastUpdateRow);
-
-        // 组装卡片
-        card.appendChild(cardHeader);
-        card.appendChild(cardBody);
-
-        mobileContainer.appendChild(card);
     });
 }
-
 // 移动端网站卡片渲染函数
 function renderMobileSiteCards(sites) {
     const mobileContainer = document.getElementById('mobileSiteContainer');
@@ -5668,9 +5790,9 @@ function renderServerTable(allStatuses) {
     const tableBody = document.getElementById('serverTableBody');
     const detailsTemplate = document.getElementById('serverDetailsTemplate');
 
-    // 1. Store IDs of currently expanded servers
+    const viewModels = normalizeServerViewModels(allStatuses);
+
     const expandedServerIds = new Set();
-    // Iterate over main server rows to find their expanded detail rows
     tableBody.querySelectorAll('tr.server-row').forEach(mainRow => {
         const detailRow = mainRow.nextElementSibling;
         if (detailRow && detailRow.classList.contains('server-details-row') && !detailRow.classList.contains('d-none')) {
@@ -5681,88 +5803,48 @@ function renderServerTable(allStatuses) {
         }
     });
 
-    tableBody.innerHTML = ''; // Clear existing rows
+    tableBody.innerHTML = '';
 
-    allStatuses.forEach(data => {
-        const serverId = data.server.id;
-        const serverName = data.server.name;
-        const metrics = data.metrics;
-        const hasError = data.error;
+    if (viewModels.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="11" class="text-center">暂无服务器数据</td></tr>';
+        renderDesktopServerCards(viewModels);
+        renderMobileServerCards(viewModels);
+        return;
+    }
 
-        let statusBadge = '<span class="badge bg-secondary">未知</span>';
-        let cpuHtml = '-';
-        let memoryHtml = '-';
-        let diskHtml = '-';
-        let uploadSpeed = '-';
-        let downloadSpeed = '-';
-        let totalUpload = '-';
-        let totalDownload = '-';
-        let uptime = '-';
-        let lastUpdate = '-';
-
-        if (hasError) {
-            statusBadge = '<span class="badge bg-warning text-dark">错误</span>';
-        } else if (metrics) {
-            const now = new Date();
-            const lastReportTime = new Date(metrics.timestamp * 1000);
-            const diffMinutes = (now - lastReportTime) / (1000 * 60);
-
-            if (diffMinutes <= 5) { // Considered online within 5 minutes
-                statusBadge = '<span class="badge bg-success">在线</span>';
-            } else {
-                statusBadge = '<span class="badge bg-danger">离线</span>';
-            }
-
-            cpuHtml = getProgressBarHtml(metrics.cpu.usage_percent);
-            memoryHtml = getProgressBarHtml(metrics.memory.usage_percent);
-            diskHtml = getProgressBarHtml(metrics.disk.usage_percent);
-            uploadSpeed = formatNetworkSpeed(metrics.network.upload_speed);
-            downloadSpeed = formatNetworkSpeed(metrics.network.download_speed);
-            totalUpload = formatDataSize(metrics.network.total_upload);
-            totalDownload = formatDataSize(metrics.network.total_download);
-            uptime = metrics.uptime ? formatUptime(metrics.uptime) : '-';
-            lastUpdate = lastReportTime.toLocaleString();
-        }
-
-        // Create the main row
+    viewModels.forEach(viewModel => {
         const mainRow = document.createElement('tr');
         mainRow.classList.add('server-row');
-        mainRow.setAttribute('data-server-id', serverId);
-        mainRow.innerHTML = \`
-            <td>\${serverName}</td>
-            <td>\${statusBadge}</td>
-            <td>\${cpuHtml}</td>
-            <td>\${memoryHtml}</td>
-            <td>\${diskHtml}</td>
-            <td><span style="color: #000;">\${uploadSpeed}</span></td>
-            <td><span style="color: #000;">\${downloadSpeed}</span></td>
-            <td><span style="color: #000;">\${totalUpload}</span></td>
-            <td><span style="color: #000;">\${totalDownload}</span></td>
-            <td><span style="color: #000;">\${uptime}</span></td>
-            <td><span style="color: #000;">\${lastUpdate}</span></td>
-        \`;
+        mainRow.setAttribute('data-server-id', viewModel.id);
+        mainRow.innerHTML = `
+            <td>${viewModel.displayName}</td>
+            <td>${viewModel.statusBadgeHtml}</td>
+            <td>${viewModel.cpu.progressHtml}</td>
+            <td>${viewModel.memory.progressHtml}</td>
+            <td>${viewModel.disk.progressHtml}</td>
+            <td><span style="color: #000;">${viewModel.network.uploadSpeed}</span></td>
+            <td><span style="color: #000;">${viewModel.network.downloadSpeed}</span></td>
+            <td><span style="color: #000;">${viewModel.network.totalUpload}</span></td>
+            <td><span style="color: #000;">${viewModel.network.totalDownload}</span></td>
+            <td><span style="color: #000;">${viewModel.uptimeText}</span></td>
+            <td><span style="color: #000;">${viewModel.lastUpdateText}</span></td>
+        `;
 
-        // Clone the details row template
         const detailsRowElement = detailsTemplate.content.cloneNode(true).querySelector('tr');
-        // The template has d-none by default. We will remove it if needed.
-        // Set a unique attribute for easier selection if needed, though direct reference is used here.
-        // detailsRowElement.setAttribute('data-detail-for', serverId); 
 
         tableBody.appendChild(mainRow);
         tableBody.appendChild(detailsRowElement);
 
-        // 2. If this server was previously expanded, re-expand it and populate its details
-        if (expandedServerIds.has(serverId)) {
+        if (expandedServerIds.has(viewModel.id)) {
             detailsRowElement.classList.remove('d-none');
-            populateDetailsRow(serverId, detailsRowElement); // Populate content
+            populateDetailsRow(viewModel.id, detailsRowElement);
         }
     });
 
-    // 3. 同时渲染移动端卡片
-    renderMobileServerCards(allStatuses);
+    renderDesktopServerCards(viewModels);
+
+    renderMobileServerCards(viewModels);
 }
-
-
 // Format network speed
 function formatNetworkSpeed(bytesPerSecond) {
     if (typeof bytesPerSecond !== 'number' || isNaN(bytesPerSecond)) return '-';
