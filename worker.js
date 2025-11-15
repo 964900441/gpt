@@ -4660,7 +4660,7 @@ function createServerViewModel(data) {
 
     const statusBadge = getServerStatusBadge(status);
     const { badgeClass: statusBadgeCssClass = '', text: statusBadgeText = '' } = statusBadge || {};
-    const statusBadgeHtml = `<span class="badge ${statusBadgeCssClass}">${statusBadgeText}</span>`;
+    const statusBadgeHtml = \`<span class="badge \${statusBadgeCssClass}">\${statusBadgeText}</span>\`;
 
     const cpuPercent = metrics && metrics.cpu && typeof metrics.cpu.usage_percent === 'number'
         ? metrics.cpu.usage_percent
@@ -4687,17 +4687,17 @@ function createServerViewModel(data) {
         hasError,
         cpu: {
             percent: cpuPercent,
-            displayValue: typeof cpuPercent === 'number' ? `${cpuPercent.toFixed(1)}%` : '-',
+            displayValue: typeof cpuPercent === 'number' ? (cpuPercent.toFixed(1) + '%') : '-',
             progressHtml: typeof cpuPercent === 'number' ? getProgressBarHtml(cpuPercent) : '-'
         },
         memory: {
             percent: memoryPercent,
-            displayValue: typeof memoryPercent === 'number' ? `${memoryPercent.toFixed(1)}%` : '-',
+            displayValue: typeof memoryPercent === 'number' ? (memoryPercent.toFixed(1) + '%') : '-',
             progressHtml: typeof memoryPercent === 'number' ? getProgressBarHtml(memoryPercent) : '-'
         },
         disk: {
             percent: diskPercent,
-            displayValue: typeof diskPercent === 'number' ? `${diskPercent.toFixed(1)}%` : '-',
+            displayValue: typeof diskPercent === 'number' ? (diskPercent.toFixed(1) + '%') : '-',
             progressHtml: typeof diskPercent === 'number' ? getProgressBarHtml(diskPercent) : '-'
         },
         network: {
@@ -4781,12 +4781,12 @@ function buildServerCard(viewModel, options = {}) {
         if (twoColumnClassName) {
             row.className = twoColumnClassName;
         }
-        row.innerHTML = pairs.map(pair => `
-            <div class="${columnItemClassName}">
-                <span class="${labelClassName}">${pair.label}</span>
-                <span class="${valueClassName}">${pair.value}</span>
-            </div>
-        `).join('');
+        row.innerHTML = pairs.map(pair => (
+            '<div class="' + columnItemClassName + '">' +
+                '<span class="' + labelClassName + '">' + pair.label + '</span>' +
+                '<span class="' + valueClassName + '">' + pair.value + '</span>' +
+            '</div>'
+        )).join('');
         body.appendChild(row);
     };
 
@@ -4795,10 +4795,8 @@ function buildServerCard(viewModel, options = {}) {
         if (rowClassName) {
             row.className = rowClassName;
         }
-        row.innerHTML = `
-            <span class="${labelClassName}">${label}</span>
-            <span class="${valueClassName}">${value}</span>
-        `;
+        row.innerHTML = '<span class="' + labelClassName + '">' + label + '</span>' +
+            '<span class="' + valueClassName + '">' + value + '</span>';
         body.appendChild(row);
     };
 
@@ -4860,9 +4858,7 @@ function renderServerCardCollection(serverDataList, options = {}) {
 function renderDesktopServerCards(serverDataList) {
     renderServerCardCollection(serverDataList, {
         containerId: 'serverCardContainer',
-        emptyStateHtml: `
-            <div class="text-center p-4 text-muted">暂无服务器数据</div>
-        `,
+        emptyStateHtml: '<div class="text-center p-4 text-muted">暂无服务器数据</div>',
         cardOptions: {
             cardClasses: ['server-card', 'desktop-server-card'],
             headerClasses: ['server-card-header'],
@@ -4881,15 +4877,15 @@ function renderDesktopServerCards(serverDataList) {
 function renderMobileServerCards(serverDataList) {
     renderServerCardCollection(serverDataList, {
         containerId: 'mobileServerContainer',
-        emptyStateHtml: `
-            <div class="text-center p-4">
-                <i class="bi bi-server text-muted" style="font-size: 3rem;"></i>
-                <div class="mt-3 text-muted">
-                    <h6>暂无服务器数据</h6>
-                    <small>请登录管理后台添加服务器</small>
-                </div>
-            </div>
-        `,
+        emptyStateHtml: [
+            '<div class="text-center p-4">',
+            '    <i class="bi bi-server text-muted" style="font-size: 3rem;"></i>',
+            '    <div class="mt-3 text-muted">',
+            '        <h6>暂无服务器数据</h6>',
+            '        <small>请登录管理后台添加服务器</small>',
+            '    </div>',
+            '</div>'
+        ].join(''),
         cardOptions: {
             cardClasses: ['server-card', 'mobile-server-card'],
             headerClasses: ['server-card-header', 'mobile-card-header'],
@@ -5201,19 +5197,19 @@ function renderServerTable(allStatuses) {
         const mainRow = document.createElement('tr');
         mainRow.classList.add('server-row');
         mainRow.setAttribute('data-server-id', viewModel.id);
-        mainRow.innerHTML = `
-            <td>${viewModel.displayName}</td>
-            <td>${viewModel.statusBadgeHtml}</td>
-            <td>${viewModel.cpu.progressHtml}</td>
-            <td>${viewModel.memory.progressHtml}</td>
-            <td>${viewModel.disk.progressHtml}</td>
-            <td><span style="color: #000;">${viewModel.network.uploadSpeed}</span></td>
-            <td><span style="color: #000;">${viewModel.network.downloadSpeed}</span></td>
-            <td><span style="color: #000;">${viewModel.network.totalUpload}</span></td>
-            <td><span style="color: #000;">${viewModel.network.totalDownload}</span></td>
-            <td><span style="color: #000;">${viewModel.uptimeText}</span></td>
-            <td><span style="color: #000;">${viewModel.lastUpdateText}</span></td>
-        `;
+        mainRow.innerHTML = [
+            '<td>' + viewModel.displayName + '</td>',
+            '<td>' + viewModel.statusBadgeHtml + '</td>',
+            '<td>' + viewModel.cpu.progressHtml + '</td>',
+            '<td>' + viewModel.memory.progressHtml + '</td>',
+            '<td>' + viewModel.disk.progressHtml + '</td>',
+            '<td><span style=\"color: #000;\">' + viewModel.network.uploadSpeed + '</span></td>',
+            '<td><span style=\"color: #000;\">' + viewModel.network.downloadSpeed + '</span></td>',
+            '<td><span style=\"color: #000;\">' + viewModel.network.totalUpload + '</span></td>',
+            '<td><span style=\"color: #000;\">' + viewModel.network.totalDownload + '</span></td>',
+            '<td><span style=\"color: #000;\">' + viewModel.uptimeText + '</span></td>',
+            '<td><span style=\"color: #000;\">' + viewModel.lastUpdateText + '</span></td>'
+        ].join('');
 
         const detailsRowElement = detailsTemplate.content.cloneNode(true).querySelector('tr');
 
