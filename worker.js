@@ -198,6 +198,17 @@ function getClientIP(request) {
          '127.0.0.1';
 }
 
+function jsonResponse(data, corsHeaders = {}, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...corsHeaders }
+  });
+}
+
+function errorResponse(error, message, status = 400, corsHeaders = {}, extra = {}) {
+  return jsonResponse({ error, message, ...extra }, corsHeaders, status);
+}
+
 // ==================== 数据库结构 ====================
 
 const D1_SCHEMAS = {
@@ -426,13 +437,10 @@ async function handleApiRequest(request, env, ctx) {
 
   // 速率限制检查（登录接口除外）
   if (path !== '/api/auth/login' && !checkRateLimit(clientIP, path, env)) {
-    return new Response(JSON.stringify({
+    return jsonResponse({
       error: 'Rate limit exceeded',
       message: '请求过于频繁，请稍后再试'
-    }), {
-      status: 429,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }
-    });
+    }, corsHeaders, 429);
   }
 
   // 数据库初始化API（无需认证）
@@ -440,21 +448,13 @@ async function handleApiRequest(request, env, ctx) {
     try {
       console.log("手动触发数据库初始化...");
       await ensureTablesExist(env.DB, env);
-      return new Response(JSON.stringify({
+      return jsonResponse({
         success: true,
         message: '数据库初始化完成'
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("数据库初始化失败:", error);
-      return new Response(JSON.stringify({
-        error: 'Database initialization failed',
-        message: `数据库初始化失败: ${error.message}`
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Database initialization failed', `数据库初始化失败: ${error.message}`, 500, corsHeaders);
     }
   }
 
@@ -464,25 +464,13 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/auth/login' && method === 'POST') {
     try {
       if (!checkLoginAttempts(clientIP, env)) {
-        return new Response(JSON.stringify({
-          error: 'Too many login attempts',
-          message: '登录尝试次数过多，请15分钟后再试'
-        }), {
-          status: 429,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Too many login attempts', '登录尝试次数过多，请15分钟后再试', 429, corsHeaders);
       }
 
       const { username, password } = await request.json();
       if (!username || !password) {
         recordLoginAttempt(clientIP);
-        return new Response(JSON.stringify({
-          error: 'Missing credentials',
-          message: '用户名和密码不能为空'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Missing credentials', '用户名和密码不能为空', 400, corsHeaders);
       }
 
       // 获取用户凭证
@@ -493,25 +481,13 @@ async function handleApiRequest(request, env, ctx) {
 
       if (!user) {
         recordLoginAttempt(clientIP);
-        return new Response(JSON.stringify({
-          error: 'Invalid credentials',
-          message: '用户名或密码错误。如果是首次部署，请等待1-2分钟让数据库初始化完成。'
-        }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid credentials', '用户名或密码错误。如果是首次部署，请等待1-2分钟让数据库初始化完成。', 401, corsHeaders);
       }
 
       // 检查账户锁定状态
       if (user.locked_until && Date.now() < user.locked_until) {
         const unlockTime = new Date(user.locked_until).toLocaleString('zh-CN');
-        return new Response(JSON.stringify({
-          error: 'Account locked',
-          message: `账户已被锁定，解锁时间：${unlockTime}`
-        }), {
-          status: 423,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Account locked', `账户已被锁定，解锁时间：${unlockTime}`, 423, corsHeaders);
       }
 
       // 密码验证
@@ -529,13 +505,7 @@ async function handleApiRequest(request, env, ctx) {
           UPDATE admin_credentials SET failed_attempts = ?, locked_until = ? WHERE username = ?
         `).bind(newFailedAttempts, lockedUntil, username).run();
 
-        return new Response(JSON.stringify({
-          error: 'Invalid credentials',
-          message: '用户名或密码错误'
-        }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid credentials', '用户名或密码错误', 401, corsHeaders);
       }
 
       // 登录成功处理
@@ -567,19 +537,11 @@ async function handleApiRequest(request, env, ctx) {
         responseData.message = '您正在使用默认密码，建议修改密码以确保安全';
       }
 
-      return new Response(JSON.stringify(responseData), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse(responseData, corsHeaders);
 
     } catch (error) {
       console.error("Login error:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: '服务器内部错误'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', '服务器内部错误', 500, corsHeaders);
     }
   }
   
@@ -587,37 +549,19 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/auth/change-password' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要登录'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要登录', 401, corsHeaders);
     }
 
     try {
       const { current_password, new_password } = await request.json();
       if (!current_password || !new_password) {
-        return new Response(JSON.stringify({
-          error: 'Missing required fields',
-          message: '当前密码和新密码都是必需的'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Missing required fields', '当前密码和新密码都是必需的', 400, corsHeaders);
       }
 
       // 密码强度验证
       const config = getSecurityConfig(env);
       if (new_password.length < config.MIN_PASSWORD_LENGTH) {
-        return new Response(JSON.stringify({
-          error: 'Password too weak',
-          message: `新密码长度不能少于${config.MIN_PASSWORD_LENGTH}个字符`
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Password too weak', `新密码长度不能少于${config.MIN_PASSWORD_LENGTH}个字符`, 400, corsHeaders);
       }
 
       // 获取当前用户信息
@@ -626,25 +570,13 @@ async function handleApiRequest(request, env, ctx) {
       `).bind(user.username).first();
 
       if (!currentUser) {
-        return new Response(JSON.stringify({
-          error: 'User not found',
-          message: '用户不存在'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('User not found', '用户不存在', 404, corsHeaders);
       }
 
       // 验证当前密码
       const isCurrentPasswordValid = await verifyPassword(current_password, currentUser.password_hash);
       if (!isCurrentPasswordValid) {
-        return new Response(JSON.stringify({
-          error: 'Invalid current password',
-          message: '当前密码错误'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid current password', '当前密码错误', 400, corsHeaders);
       }
 
       // 更新密码
@@ -654,22 +586,14 @@ async function handleApiRequest(request, env, ctx) {
         UPDATE admin_credentials SET password_hash = ?, password_changed_at = ? WHERE username = ?
       `).bind(newPasswordHash, now, user.username).run();
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         success: true,
         message: '密码修改成功'
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
 
     } catch (error) {
       console.error("Change password error:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: '服务器内部错误'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', '服务器内部错误', 500, corsHeaders);
     }
   }
 
@@ -677,35 +601,21 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/auth/refresh' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要有效的令牌'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要有效的令牌', 401, corsHeaders);
     }
 
     try {
       const newToken = await createJWT({ username: user.username }, env);
       const config = getSecurityConfig(env);
-      return new Response(JSON.stringify({
+      return jsonResponse({
         token: newToken,
         user: { username: user.username },
         expires_in: config.TOKEN_EXPIRY / 1000,
         message: '令牌刷新成功'
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("令牌刷新错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: '令牌刷新失败'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', '令牌刷新失败', 500, corsHeaders);
     }
   }
 
@@ -722,9 +632,7 @@ async function handleApiRequest(request, env, ctx) {
       } : null
     };
 
-    return new Response(JSON.stringify(responseData), {
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }
-    });
+    return jsonResponse(responseData, corsHeaders);
   }
 
 
@@ -738,36 +646,20 @@ async function handleApiRequest(request, env, ctx) {
         'SELECT id, name, description FROM servers ORDER BY sort_order ASC NULLS LAST, name ASC'
       ).all();
 
-      return new Response(JSON.stringify({ servers: results || [] }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ servers: results || [] }, corsHeaders);
     } catch (error) {
       console.error("获取服务器列表错误:", error);
       if (error.message.includes('no such table')) {
         console.warn("服务器表不存在，尝试创建...");
         try {
           await env.DB.exec(D1_SCHEMAS.servers);
-          return new Response(JSON.stringify({ servers: [] }), {
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return jsonResponse({ servers: [] }, corsHeaders);
         } catch (createError) {
           console.error("创建服务器表失败:", createError);
-          return new Response(JSON.stringify({
-            error: 'Database error',
-            message: createError.message
-          }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return errorResponse('Database error', createError.message, 500, corsHeaders);
         }
       }
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
   
@@ -776,13 +668,7 @@ async function handleApiRequest(request, env, ctx) {
     try {
       const serverId = extractAndValidateServerId(path);
       if (!serverId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid server ID',
-          message: '无效的服务器ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid server ID', '无效的服务器ID格式', 400, corsHeaders);
       }
 
       // 获取服务器信息
@@ -791,10 +677,7 @@ async function handleApiRequest(request, env, ctx) {
       ).bind(serverId).first();
 
       if (!serverData) {
-        return new Response(JSON.stringify({ error: 'Server not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return jsonResponse({ error: 'Server not found' }, corsHeaders, 404);
       }
 
       // 获取监控数据
@@ -822,42 +705,25 @@ async function handleApiRequest(request, env, ctx) {
         }
       }
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         server: serverData,
         metrics: metricsData
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("获取服务器状态错误:", error);
       if (error.message.includes('no such table')) {
         console.warn("服务器或监控表不存在，尝试创建...");
         try {
           await env.DB.exec(D1_SCHEMAS.servers + D1_SCHEMAS.metrics);
-          return new Response(JSON.stringify({
+          return jsonResponse({
             error: 'Server not found (tables created)'
-          }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          }, corsHeaders, 404);
         } catch (createError) {
           console.error("创建表失败:", createError);
-          return new Response(JSON.stringify({
-            error: 'Database error',
-            message: createError.message
-          }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return errorResponse('Database error', createError.message, 500, corsHeaders);
         }
       }
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
   
@@ -867,13 +733,7 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/servers' && method === 'GET') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
@@ -885,36 +745,20 @@ async function handleApiRequest(request, env, ctx) {
         ORDER BY s.sort_order ASC NULLS LAST, s.name ASC
       `).all();
 
-      return new Response(JSON.stringify({ servers: results || [] }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ servers: results || [] }, corsHeaders);
     } catch (error) {
       console.error("管理员获取服务器列表错误:", error);
       if (error.message.includes('no such table')) {
         console.warn("服务器或监控表不存在，尝试创建...");
         try {
           await env.DB.exec(D1_SCHEMAS.servers + D1_SCHEMAS.metrics);
-          return new Response(JSON.stringify({ servers: [] }), {
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return jsonResponse({ servers: [] }, corsHeaders);
         } catch (createError) {
           console.error("创建表失败:", createError);
-          return new Response(JSON.stringify({
-            error: 'Database error',
-            message: createError.message
-          }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return errorResponse('Database error', createError.message, 500, corsHeaders);
         }
       }
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: '服务器内部错误'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', '服务器内部错误', 500, corsHeaders);
     }
   }
   
@@ -922,13 +766,7 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/servers' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
@@ -936,23 +774,11 @@ async function handleApiRequest(request, env, ctx) {
 
       // 输入验证
       if (!name?.trim()) {
-        return new Response(JSON.stringify({
-          error: 'Server name is required',
-          message: '服务器名称不能为空'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Server name is required', '服务器名称不能为空', 400, corsHeaders);
       }
 
       if (name.trim().length > 100) {
-        return new Response(JSON.stringify({
-          error: 'Server name too long',
-          message: '服务器名称不能超过100个字符'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Server name too long', '服务器名称不能超过100个字符', 400, corsHeaders);
       }
 
       // 生成服务器ID和API密钥
@@ -984,52 +810,29 @@ async function handleApiRequest(request, env, ctx) {
         sort_order: nextSortOrder
       };
 
-      return new Response(JSON.stringify({ server: serverData }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ server: serverData }, corsHeaders);
     } catch (error) {
       console.error("管理员添加服务器错误:", error);
 
       if (error.message.includes('UNIQUE constraint failed')) {
-        return new Response(JSON.stringify({
-          error: 'Server ID or API Key conflict',
-          message: '服务器ID或API密钥冲突，请重试'
-        }), {
-          status: 409,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Server ID or API Key conflict', '服务器ID或API密钥冲突，请重试', 409, corsHeaders);
       }
 
       if (error.message.includes('no such table')) {
         console.warn("服务器表不存在，尝试创建...");
         try {
           await env.DB.exec(D1_SCHEMAS.servers);
-          return new Response(JSON.stringify({
+          return jsonResponse({
             error: 'Database table created, please retry',
             message: '数据库表已创建，请重试添加操作'
-          }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          }, corsHeaders, 503);
         } catch (createError) {
           console.error("创建服务器表失败:", createError);
-          return new Response(JSON.stringify({
-            error: 'Database error',
-            message: createError.message
-          }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return errorResponse('Database error', createError.message, 500, corsHeaders);
         }
       }
 
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
   
@@ -1037,55 +840,29 @@ async function handleApiRequest(request, env, ctx) {
   if (path.match(/\/api\/admin\/servers\/[^\/]+$/) && method === 'DELETE') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
       const serverId = extractAndValidateServerId(path);
       if (!serverId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid server ID',
-          message: '无效的服务器ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid server ID', '无效的服务器ID格式', 400, corsHeaders);
       }
 
       // 删除服务器（外键约束会自动删除关联的metrics数据）
       const info = await env.DB.prepare('DELETE FROM servers WHERE id = ?').bind(serverId).run();
 
       if (info.changes === 0) {
-        return new Response(JSON.stringify({
-          error: 'Server not found',
-          message: '服务器不存在'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Server not found', '服务器不存在', 404, corsHeaders);
       }
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         success: true,
         message: '服务器删除成功'
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("管理员删除服务器错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: '服务器内部错误'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', '服务器内部错误', 500, corsHeaders);
     }
   }
   
@@ -1093,48 +870,24 @@ async function handleApiRequest(request, env, ctx) {
   if (path.match(/\/api\/admin\/servers\/[^\/]+$/) && method === 'PUT') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
       const serverId = extractAndValidateServerId(path);
       if (!serverId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid server ID',
-          message: '无效的服务器ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid server ID', '无效的服务器ID格式', 400, corsHeaders);
       }
 
       const { name, description } = await request.json();
 
       // 输入验证
       if (!name || !validateInput(name, 'serverName')) {
-        return new Response(JSON.stringify({
-          error: 'Invalid server name',
-          message: '服务器名称格式无效（1-100个字符，支持字母、数字、空格、连字符、下划线、中文）'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid server name', '服务器名称格式无效（1-100个字符，支持字母、数字、空格、连字符、下划线、中文）', 400, corsHeaders);
       }
 
       if (description && !validateInput(description, 'description')) {
-        return new Response(JSON.stringify({
-          error: 'Invalid description',
-          message: '描述格式无效（最多500个字符）'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid description', '描述格式无效（最多500个字符）', 400, corsHeaders);
       }
 
       // 构建动态更新查询
@@ -1151,12 +904,9 @@ async function handleApiRequest(request, env, ctx) {
       }
 
       if (setClauses.length === 0) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'No fields to update provided'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 400);
       }
 
       bindings.push(serverId);
@@ -1165,26 +915,15 @@ async function handleApiRequest(request, env, ctx) {
       ).bind(...bindings).run();
 
       if (info.changes === 0) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Server not found'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 404);
       }
 
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ success: true }, corsHeaders);
     } catch (error) {
       console.error("管理员更新服务器错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
   
@@ -1195,24 +934,12 @@ async function handleApiRequest(request, env, ctx) {
     try {
       const serverId = extractAndValidateServerId(path);
       if (!serverId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid server ID',
-          message: '无效的服务器ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid server ID', '无效的服务器ID格式', 400, corsHeaders);
       }
 
       const apiKey = request.headers.get('X-API-Key');
       if (!apiKey) {
-        return new Response(JSON.stringify({
-          error: 'API key required',
-          message: '需要API密钥'
-        }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('API key required', '需要API密钥', 401, corsHeaders);
       }
 
       // 验证服务器和API密钥
@@ -1221,23 +948,11 @@ async function handleApiRequest(request, env, ctx) {
       ).bind(serverId).first();
 
       if (!serverData) {
-        return new Response(JSON.stringify({
-          error: 'Server not found',
-          message: '服务器不存在'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Server not found', '服务器不存在', 404, corsHeaders);
       }
 
       if (serverData.api_key !== apiKey) {
-        return new Response(JSON.stringify({
-          error: 'Invalid API key',
-          message: 'API密钥无效'
-        }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid API key', 'API密钥无效', 401, corsHeaders);
       }
 
       // 获取VPS上报间隔设置
@@ -1272,9 +987,7 @@ async function handleApiRequest(request, env, ctx) {
         timestamp: Math.floor(Date.now() / 1000)
       };
 
-      return new Response(JSON.stringify(configData), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse(configData, corsHeaders);
 
     } catch (error) {
       console.error("配置获取API错误:", error, {
@@ -1284,14 +997,11 @@ async function handleApiRequest(request, env, ctx) {
         stack: error.stack
       });
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         error: 'Internal server error',
         message: `服务器内部错误: ${error.message}`,
         details: '请稍后重试，如果问题持续存在请联系管理员'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders, 500);
     }
   }
 
@@ -1302,23 +1012,14 @@ async function handleApiRequest(request, env, ctx) {
     try {
       const serverId = extractAndValidateServerId(path);
       if (!serverId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid server ID',
-          message: '无效的服务器ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid server ID', '无效的服务器ID格式', 400, corsHeaders);
       }
 
       const apiKey = request.headers.get('X-API-Key');
       if (!apiKey) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'API key required'
-        }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 401);
       }
 
       // 验证服务器和API密钥
@@ -1327,21 +1028,15 @@ async function handleApiRequest(request, env, ctx) {
       ).bind(serverId).first();
 
       if (!serverData) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Server not found'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 404);
       }
 
       if (serverData.api_key !== apiKey) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Invalid API key'
-        }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 401);
       }
 
       // 解析和验证上报数据
@@ -1354,14 +1049,11 @@ async function handleApiRequest(request, env, ctx) {
       } catch (parseError) {
         console.error('JSON解析错误:', parseError.message);
         console.error('原始数据:', rawBody || '无法读取原始数据');
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Invalid JSON format',
           message: `JSON解析失败: ${parseError.message}`,
           details: '请检查上报的JSON格式是否正确'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 400);
       }
       const requiredFields = ['timestamp', 'cpu', 'memory', 'disk', 'network'];
 
@@ -1372,15 +1064,12 @@ async function handleApiRequest(request, env, ctx) {
             receivedFields: Object.keys(reportData),
             missingField: field
           });
-          return new Response(JSON.stringify({
+          return jsonResponse({
             error: 'Invalid data format',
             message: `缺少必需字段: ${field}`,
             details: `上报数据必须包含以下字段: ${requiredFields.join(', ')}, uptime`,
             received_fields: Object.keys(reportData)
-          }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          }, corsHeaders, 400);
         }
       }
 
@@ -1389,15 +1078,12 @@ async function handleApiRequest(request, env, ctx) {
           serverId,
           receivedFields: Object.keys(reportData)
         });
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Invalid data format',
           message: '缺少uptime字段',
           details: 'uptime字段是必需的，用于记录系统运行时间（秒）',
           received_fields: Object.keys(reportData)
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 400);
       }
 
       // 增强的JSON对象结构验证
@@ -1497,12 +1183,10 @@ async function handleApiRequest(request, env, ctx) {
         console.warn("获取VPS上报间隔失败，使用默认值:", intervalError);
       }
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         success: true,
         interval: currentInterval
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("数据上报API错误:", error, {
         serverId,
@@ -1515,37 +1199,28 @@ async function handleApiRequest(request, env, ctx) {
         console.warn("服务器或监控表不存在，尝试创建...");
         try {
           await env.DB.exec(D1_SCHEMAS.servers + D1_SCHEMAS.metrics);
-          return new Response(JSON.stringify({
+          return jsonResponse({
             error: 'Database table created or server not found, please retry or verify server ID/API Key',
             message: '数据库表已创建或服务器不存在，请重试或验证服务器ID/API密钥',
             details: '如果问题持续存在，请检查服务器配置',
             retry_suggested: true
-          }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          }, corsHeaders, 503);
         } catch (createError) {
           console.error("创建表失败:", createError);
-          return new Response(JSON.stringify({
+          return jsonResponse({
             error: 'Database error',
             message: `数据库错误: ${createError.message}`,
             details: '无法创建必需的数据库表，请联系管理员'
-          }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          }, corsHeaders, 500);
         }
       }
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         error: 'Internal server error',
         message: `服务器内部错误: ${error.message}`,
         details: '请稍后重试，如果问题持续存在请联系管理员',
         error_id: Date.now().toString(36) // 简单的错误ID用于追踪
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders, 500);
     }
   }
   
@@ -1557,26 +1232,14 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/servers/batch-reorder' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
       const { serverIds } = await request.json(); // 按新顺序排列的服务器ID数组
 
       if (!Array.isArray(serverIds) || serverIds.length === 0) {
-        return new Response(JSON.stringify({
-          error: 'Invalid server IDs',
-          message: '服务器ID数组无效'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid server IDs', '服务器ID数组无效', 400, corsHeaders);
       }
 
       // 批量更新排序
@@ -1586,21 +1249,13 @@ async function handleApiRequest(request, env, ctx) {
 
       await env.DB.batch(updateStmts);
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         success: true,
         message: '批量排序完成'
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("批量服务器排序错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -1608,13 +1263,7 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/servers/auto-sort' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
@@ -1624,23 +1273,15 @@ async function handleApiRequest(request, env, ctx) {
       const validOrders = ['asc', 'desc'];
 
       if (!validSortFields.includes(sortBy) || !validOrders.includes(order)) {
-        return new Response(JSON.stringify({
-          error: 'Invalid sort parameters',
-          message: '无效的排序参数'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid sort parameters', '无效的排序参数', 400, corsHeaders);
       }
 
       // 如果是自定义排序，直接返回成功，不做任何操作
       if (sortBy === 'custom') {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           success: true,
           message: '已设置为自定义排序'
-        }), {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders);
       }
 
       // 获取所有服务器并排序
@@ -1664,21 +1305,13 @@ async function handleApiRequest(request, env, ctx) {
 
       await env.DB.batch(updateStmts);
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         success: true,
         message: `已按${sortBy}${order === 'asc' ? '升序' : '降序'}排序`
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("自动服务器排序错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -1687,23 +1320,14 @@ async function handleApiRequest(request, env, ctx) {
     try {
       const serverId = extractPathSegment(path, 4);
       if (!serverId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid server ID',
-          message: '无效的服务器ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid server ID', '无效的服务器ID格式', 400, corsHeaders);
       }
 
       const { direction } = await request.json();
       if (!['up', 'down'].includes(direction)) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Invalid direction'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 400);
       }
 
       // 获取所有服务器排序信息
@@ -1715,12 +1339,9 @@ async function handleApiRequest(request, env, ctx) {
       const currentIndex = allServers.findIndex(s => s.id === serverId);
 
       if (currentIndex === -1) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Server not found'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 404);
       }
 
       // 计算目标位置
@@ -1774,18 +1395,10 @@ async function handleApiRequest(request, env, ctx) {
         }
       }
 
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ success: true }, corsHeaders);
     } catch (error) {
       console.error("管理员服务器排序错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -1797,13 +1410,7 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/sites' && method === 'GET') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
@@ -1814,29 +1421,19 @@ async function handleApiRequest(request, env, ctx) {
         ORDER BY sort_order ASC NULLS LAST, name ASC, url ASC
       `).all();
 
-      return new Response(JSON.stringify({ sites: results || [] }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ sites: results || [] }, corsHeaders);
     } catch (error) {
       console.error("管理员获取监控站点错误:", error);
       if (error.message.includes('no such table')) {
         console.warn("监控站点表不存在，尝试创建...");
         try {
           await env.DB.exec(D1_SCHEMAS.monitored_sites);
-          return new Response(JSON.stringify({ sites: [] }), {
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return jsonResponse({ sites: [] }, corsHeaders);
         } catch (createError) {
           console.error("创建监控站点表失败:", createError);
         }
       }
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: '服务器内部错误'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', '服务器内部错误', 500, corsHeaders);
     }
   }
 
@@ -1844,26 +1441,14 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/sites' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
       const { url, name } = await request.json();
 
       if (!url || !isValidHttpUrl(url)) {
-        return new Response(JSON.stringify({
-          error: 'Valid URL is required',
-          message: '请输入有效的URL'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Valid URL is required', '请输入有效的URL', 400, corsHeaders);
       }
 
       const siteId = Math.random().toString(36).substring(2, 12);
@@ -1903,46 +1488,28 @@ async function handleApiRequest(request, env, ctx) {
         );
       }
 
-      return new Response(JSON.stringify({ site: siteData }), {
-        status: 201,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ site: siteData }, corsHeaders, 201);
     } catch (error) {
       console.error("管理员添加监控站点错误:", error);
 
       if (error.message.includes('UNIQUE constraint failed')) {
-        return new Response(JSON.stringify({
-          error: 'URL already exists or ID conflict',
-          message: '该URL已被监控或ID冲突'
-        }), {
-          status: 409,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('URL already exists or ID conflict', '该URL已被监控或ID冲突', 409, corsHeaders);
       }
 
       if (error.message.includes('no such table')) {
         console.warn("监控站点表不存在，尝试创建...");
         try {
           await env.DB.exec(D1_SCHEMAS.monitored_sites);
-          return new Response(JSON.stringify({
+          return jsonResponse({
             error: 'Database table created, please retry',
             message: '数据库表已创建，请重试添加操作'
-          }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          }, corsHeaders, 503);
         } catch (createError) {
           console.error("创建监控站点表失败:", createError);
         }
       }
 
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -1951,13 +1518,7 @@ async function handleApiRequest(request, env, ctx) {
     try {
       const siteId = extractAndValidateServerId(path);
       if (!siteId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid site ID',
-          message: '无效的站点ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid site ID', '无效的站点ID格式', 400, corsHeaders);
       }
 
       const { url, name } = await request.json();
@@ -1966,12 +1527,9 @@ async function handleApiRequest(request, env, ctx) {
 
       if (url !== undefined) {
         if (!isValidHttpUrl(url)) {
-          return new Response(JSON.stringify({
+          return jsonResponse({
             error: 'Valid URL is required if provided'
-          }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          }, corsHeaders, 400);
         }
         setClauses.push("url = ?");
         bindings.push(url);
@@ -1983,12 +1541,9 @@ async function handleApiRequest(request, env, ctx) {
       }
 
       if (setClauses.length === 0) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'No fields to update provided'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 400);
       }
 
       bindings.push(siteId);
@@ -1997,12 +1552,9 @@ async function handleApiRequest(request, env, ctx) {
       ).bind(...bindings).run();
 
       if (info.changes === 0) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Site not found or no changes made'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 404);
       }
 
       const updatedSite = await env.DB.prepare(`
@@ -2011,28 +1563,14 @@ async function handleApiRequest(request, env, ctx) {
         FROM monitored_sites WHERE id = ?
       `).bind(siteId).first();
 
-      return new Response(JSON.stringify({ site: updatedSite }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ site: updatedSite }, corsHeaders);
 
     } catch (error) {
       console.error("管理员更新监控站点错误:", error);
       if (error.message.includes('UNIQUE constraint failed')) {
-        return new Response(JSON.stringify({
-          error: 'URL already exists for another site',
-          message: '该URL已被其他监控站点使用'
-        }), {
-          status: 409,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('URL already exists for another site', '该URL已被其他监控站点使用', 409, corsHeaders);
       }
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2041,38 +1579,21 @@ async function handleApiRequest(request, env, ctx) {
     try {
       const siteId = extractAndValidateServerId(path);
       if (!siteId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid site ID',
-          message: '无效的站点ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid site ID', '无效的站点ID格式', 400, corsHeaders);
       }
 
       const info = await env.DB.prepare('DELETE FROM monitored_sites WHERE id = ?').bind(siteId).run();
 
       if (info.changes === 0) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Site not found'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 404);
       }
 
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ success: true }, corsHeaders);
     } catch (error) {
       console.error("管理员删除监控站点错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2080,26 +1601,14 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/sites/batch-reorder' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
       const { siteIds } = await request.json(); // 按新顺序排列的站点ID数组
 
       if (!Array.isArray(siteIds) || siteIds.length === 0) {
-        return new Response(JSON.stringify({
-          error: 'Invalid site IDs',
-          message: '站点ID数组无效'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid site IDs', '站点ID数组无效', 400, corsHeaders);
       }
 
       // 批量更新排序
@@ -2109,21 +1618,13 @@ async function handleApiRequest(request, env, ctx) {
 
       await env.DB.batch(updateStmts);
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         success: true,
         message: '批量排序完成'
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("批量网站排序错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2131,13 +1632,7 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/sites/auto-sort' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
@@ -2147,23 +1642,15 @@ async function handleApiRequest(request, env, ctx) {
       const validOrders = ['asc', 'desc'];
 
       if (!validSortFields.includes(sortBy) || !validOrders.includes(order)) {
-        return new Response(JSON.stringify({
-          error: 'Invalid sort parameters',
-          message: '无效的排序参数'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid sort parameters', '无效的排序参数', 400, corsHeaders);
       }
 
       // 如果是自定义排序，直接返回成功，不做任何操作
       if (sortBy === 'custom') {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           success: true,
           message: '已设置为自定义排序'
-        }), {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders);
       }
 
       // 获取所有站点并排序
@@ -2179,21 +1666,13 @@ async function handleApiRequest(request, env, ctx) {
 
       await env.DB.batch(updateStmts);
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         success: true,
         message: `已按${sortBy}${order === 'asc' ? '升序' : '降序'}排序`
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      }, corsHeaders);
     } catch (error) {
       console.error("自动网站排序错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2202,23 +1681,14 @@ async function handleApiRequest(request, env, ctx) {
     try {
       const siteId = extractPathSegment(path, 4);
       if (!siteId) {
-        return new Response(JSON.stringify({
-          error: 'Invalid site ID',
-          message: '无效的站点ID格式'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        return errorResponse('Invalid site ID', '无效的站点ID格式', 400, corsHeaders);
       }
 
       const { direction } = await request.json();
       if (!['up', 'down'].includes(direction)) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Invalid direction'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 400);
       }
 
       // 获取所有站点排序信息
@@ -2229,12 +1699,9 @@ async function handleApiRequest(request, env, ctx) {
       const currentIndex = allSites.findIndex(s => s.id === siteId);
 
       if (currentIndex === -1) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Site not found'
-        }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 404);
       }
 
       // 计算目标位置
@@ -2288,18 +1755,10 @@ async function handleApiRequest(request, env, ctx) {
         }
       }
 
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ success: true }, corsHeaders);
     } catch (error) {
       console.error("管理员网站排序错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2315,29 +1774,19 @@ async function handleApiRequest(request, env, ctx) {
         ORDER BY sort_order ASC NULLS LAST, name ASC, id ASC
       `).all();
 
-      return new Response(JSON.stringify({ sites: results || [] }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ sites: results || [] }, corsHeaders);
     } catch (error) {
       console.error("获取站点状态错误:", error);
       if (error.message.includes('no such table')) {
         console.warn("监控站点表不存在，尝试创建...");
         try {
           await env.DB.exec(D1_SCHEMAS.monitored_sites);
-          return new Response(JSON.stringify({ sites: [] }), {
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return jsonResponse({ sites: [] }, corsHeaders);
         } catch (createError) {
           console.error("创建监控站点表失败:", createError);
         }
       }
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2365,15 +1814,11 @@ async function handleApiRequest(request, env, ctx) {
         // 继续使用默认值，不阻塞响应
       }
 
-      return new Response(JSON.stringify({ interval }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ interval }, corsHeaders);
     } catch (error) {
       console.error("获取VPS上报间隔错误:", error);
       // 任何错误都返回默认值，确保系统继续工作
-      return new Response(JSON.stringify({ interval: 60 }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ interval: 60 }, corsHeaders);
     }
   }
 
@@ -2381,24 +1826,15 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/settings/vps-report-interval' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
       const { interval } = await request.json();
       if (typeof interval !== 'number' || interval <= 0 || !Number.isInteger(interval)) {
-        return new Response(JSON.stringify({
+        return jsonResponse({
           error: 'Invalid interval value. Must be a positive integer (seconds).'
-        }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders }
-        });
+        }, corsHeaders, 400);
       }
 
       await env.DB.prepare('REPLACE INTO app_config (key, value) VALUES (?, ?)').bind(
@@ -2406,18 +1842,10 @@ async function handleApiRequest(request, env, ctx) {
         interval.toString()
       ).run();
 
-      return new Response(JSON.stringify({ success: true, interval }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ success: true, interval }, corsHeaders);
     } catch (error) {
       console.error("更新VPS上报间隔错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2428,13 +1856,7 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/telegram-settings' && method === 'GET') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
@@ -2442,34 +1864,22 @@ async function handleApiRequest(request, env, ctx) {
         'SELECT bot_token, chat_id, enable_notifications FROM telegram_config WHERE id = 1'
       ).first();
 
-      return new Response(JSON.stringify(
-        settings || { bot_token: null, chat_id: null, enable_notifications: 0 }
-      ), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse(settings || { bot_token: null, chat_id: null, enable_notifications: 0 }, corsHeaders);
     } catch (error) {
       console.error("获取Telegram设置错误:", error);
       if (error.message.includes('no such table')) {
         try {
           await env.DB.exec(D1_SCHEMAS.telegram_config);
-          return new Response(JSON.stringify({
+          return jsonResponse({
             bot_token: null,
             chat_id: null,
             enable_notifications: 0
-          }), {
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          }, corsHeaders);
         } catch (createError) {
           console.error("创建Telegram配置表失败:", createError);
         }
       }
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2477,13 +1887,7 @@ async function handleApiRequest(request, env, ctx) {
   if (path === '/api/admin/telegram-settings' && method === 'POST') {
     const user = await authenticateRequest(request, env);
     if (!user) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized',
-        message: '需要管理员权限'
-      }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Unauthorized', '需要管理员权限', 401, corsHeaders);
     }
 
     try {
@@ -2508,18 +1912,10 @@ async function handleApiRequest(request, env, ctx) {
         }
       }
 
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ success: true }, corsHeaders);
     } catch (error) {
       console.error("更新Telegram设置错误:", error);
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
@@ -2537,38 +1933,25 @@ async function handleApiRequest(request, env, ctx) {
         ORDER BY timestamp DESC
       `).bind(siteId, twentyFourHoursAgoSeconds).all();
 
-      return new Response(JSON.stringify({ history: results || [] }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return jsonResponse({ history: results || [] }, corsHeaders);
     } catch (error) {
       console.error("获取站点历史错误:", error);
       if (error.message.includes('no such table')) {
         console.warn("站点状态历史表不存在，返回空列表");
         try {
           await env.DB.exec(D1_SCHEMAS.site_status_history);
-          return new Response(JSON.stringify({ history: [] }), {
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
-          });
+          return jsonResponse({ history: [] }, corsHeaders);
         } catch (createError) {
           console.error("创建站点状态历史表失败:", createError);
         }
       }
-      return new Response(JSON.stringify({
-        error: 'Internal server error',
-        message: error.message
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      return errorResponse('Internal server error', error.message, 500, corsHeaders);
     }
   }
 
 
   // 未找到匹配的API路由
-  return new Response(JSON.stringify({ error: 'API endpoint not found' }), {
-    status: 404,
-    headers: { 'Content-Type': 'application/json', ...corsHeaders }
-  });
+  return jsonResponse({ error: 'API endpoint not found' }, corsHeaders, 404);
 }
 
 
